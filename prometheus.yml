@@ -1,0 +1,13 @@
+global:
+  scrape_interval: 10s
+
+  external_labels:
+    monitor: 'golang-skeleton'
+
+scrape_configs:
+  - job_name: 'golang-skeleton'
+
+    scrape_interval: 10s
+
+    static_configs:
+      - targets: ['dockerhost:9999']
