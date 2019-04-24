@@ -8,4 +8,3 @@ func Status() func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("up and running"))
 	}
 }
-g
