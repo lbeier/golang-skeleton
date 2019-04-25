@@ -3,19 +3,23 @@ package main
 import (
 	"context"
 	"flag"
-	"go.opencensus.io/tag"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"time"
 
-	"github.com/tutabeier/golang-skeleton/pkg/health"
+	"go.opencensus.io/tag"
+
+	"go.opencensus.io/plugin/ochttp/propagation/b3"
+
 	"go.opencensus.io/exporter/jaeger"
 	"go.opencensus.io/exporter/prometheus"
 	"go.opencensus.io/plugin/ochttp"
 	"go.opencensus.io/stats/view"
 	"go.opencensus.io/trace"
+
+	"github.com/tutabeier/golang-skeleton/pkg/health"
 )
 
 func main() {
@@ -25,14 +29,16 @@ func main() {
 
 	initJaeger()
 	pe := initPrometheus()
-	registerViews()
 
 	srv := &http.Server{
-		Addr:         ":9999",
+		Addr:         ":80",
 		WriteTimeout: time.Second * 15,
 		ReadTimeout:  time.Second * 15,
 		IdleTimeout:  time.Second * 60,
-		Handler:      initRoutes(pe),
+		Handler: &ochttp.Handler{
+			Handler:     initRoutes(pe),
+			Propagation: &b3.HTTPFormat{},
+		},
 	}
 
 	go func() {
@@ -63,11 +69,12 @@ func initRoutes(p *prometheus.Exporter) *http.ServeMux {
 
 func initJaeger() {
 	je, err := jaeger.NewExporter(jaeger.Options{
-		AgentEndpoint: "127.0.0.1:6831",
+		CollectorEndpoint: "http://tracing:14268/api/traces",
 		Process: jaeger.Process{
-			ServiceName: "golang-skeleton",
+			ServiceName: "service",
 		},
 	})
+	defer je.Flush()
 
 	if err != nil {
 		log.Fatalf("Failed to create the Jaeger exporter: %v", err)
@@ -77,11 +84,12 @@ func initJaeger() {
 	trace.ApplyConfig(trace.Config{
 		DefaultSampler: trace.ProbabilitySampler(1.0),
 	})
+
 }
 
-func initPrometheus() *prometheus.Exporter{
+func initPrometheus() *prometheus.Exporter {
 	pe, err := prometheus.NewExporter(prometheus.Options{
-		Namespace: "golang-skeleton",
+		Namespace: "service",
 	})
 	if err != nil {
 		log.Fatalf("Failed to create the Prometheus exporter: %v", err)
@@ -89,10 +97,6 @@ func initPrometheus() *prometheus.Exporter{
 
 	view.RegisterExporter(pe)
 
-	return pe
-}
-
-func registerViews() {
 	endpointTags := []tag.Key{ochttp.Method, ochttp.KeyServerRoute}
 
 	latency := ochttp.ServerLatencyView
@@ -104,7 +108,7 @@ func registerViews() {
 	errors := ochttp.ServerResponseCountByStatusCode
 	errors.TagKeys = append(errors.TagKeys, endpointTags...)
 
-	view.Register(
+	err = view.Register(
 		latency,
 		requests,
 		errors,
@@ -114,5 +118,11 @@ func registerViews() {
 		ochttp.ClientSentBytesDistribution,
 		ochttp.ClientRoundtripLatencyDistribution,
 		ochttp.ClientCompletedCount,
-	)
+		ochttp.ServerRequestCountByMethod)
+
+	if err != nil {
+		log.Print("Error registering Prometheus views")
+	}
+
+	return pe
 }

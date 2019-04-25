@@ -1,25 +1,52 @@
-version: "3.2"
+version: "3.7"
 
 services:
+  api:
+    build: .
+    container_name: api
+    ports:
+      - 9999:80
+    volumes:
+      - ./:/go/src/github.com/tutabeier/golang-skeleton
+    networks:
+      main:
+        aliases:
+          - tracing
+          - monitoring
+
   jaeger:
     image: jaegertracing/all-in-one
+    container_name: jaeger
     ports:
-      - 5775:5775/udp
-      - 6831:6831/udp
-      - 6832:6832/udp
-      - 5778:5778
       - 16686:16686
-      - 14268:14268
-      - 9411:9411
+    networks:
+      main:
+        aliases:
+          - tracing
 
   prometheus:
     image: prom/prometheus
     container_name: prometheus
     ports:
-      - "9090:9090"
-    extra_hosts:
-      - "dockerhost:$DOCKERHOST"
+      - 9090:9090
     command:
       - --config.file=/etc/prometheus/prometheus.yml
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    networks:
+      main:
+        aliases:
+          - monitoring
+
+  grafana:
+    image: grafana/grafana
+    container_name: grafana
+    ports:
+      - 3000:3000
+    networks:
+      main:
+        aliases:
+          - monitoring
+
+networks:
+  main:
