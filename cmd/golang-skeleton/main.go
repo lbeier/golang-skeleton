@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"github.com/tutabeier/golang-skeleton/pkg/users"
 	"log"
 	"net/http"
@@ -19,6 +20,9 @@ import (
 	"go.opencensus.io/plugin/ochttp"
 	"go.opencensus.io/stats/view"
 	"go.opencensus.io/trace"
+
+
+	"github.com/google/uuid"
 
 	"github.com/tutabeier/golang-skeleton/pkg/health"
 )
@@ -62,7 +66,8 @@ func main() {
 func initRoutes(p *prometheus.Exporter) *http.ServeMux {
 	r := http.NewServeMux()
 
-	r.Handle("/users", users.Handler())
+	instrumentedRoute(r, "/users", users.Handler())
+
 	r.Handle("/status", health.Check())
 	r.Handle("/metrics", p)
 
@@ -127,4 +132,28 @@ func initPrometheus() *prometheus.Exporter {
 	}
 
 	return pe
+}
+
+func instrumentedRoute(r *http.ServeMux, route string, handler http.Handler) {
+	withRequestID := func(w http.ResponseWriter, r *http.Request) {
+		span := trace.FromContext(r.Context())
+		requestID := r.Header.Get("X-Request-ID")
+		if requestID == "" {
+			id, _ := uuid.NewRandom()
+			requestID = id.String()
+		}
+
+		span.AddAttributes(trace.StringAttribute("request.id", requestID))
+		ctx := trace.NewContext(r.Context(), span)
+		handler.ServeHTTP(w, r.WithContext(ctx))
+	}
+
+	h := &ochttp.Handler{
+		Handler: http.HandlerFunc(withRequestID),
+		FormatSpanName: func(r *http.Request) string {
+			return fmt.Sprintf(" %s %s", r.Method, route)
+		},
+	}
+
+	r.Handle(route, ochttp.WithRouteTag(h, route))
 }
