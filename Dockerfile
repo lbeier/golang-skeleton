@@ -1,16 +1,16 @@
-FROM golang:1.12 AS builder
-
+FROM golang:1.12-alpine AS base
+RUN apk add bash ca-certificates git gcc g++ libc-dev
 WORKDIR /go/src/github.com/tutabeier/golang-skeleton
-COPY . ./
-
 ENV GO111MODULE=on
+COPY go.mod .
+COPY go.sum .
+RUN go mod download
 
-RUN go mod tidy
-RUN go build -o build/golang-skeleton -ldflags="-s -w" github.com/tutabeier/golang-skeleton/cmd/golang-skeleton
+FROM base AS builder
+COPY . .
+RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go install -a -tags netgo -ldflags '-w -extldflags "-static"' ./cmd/golang-skeleton
 
-FROM ubuntu:bionic
-
-COPY --from=builder /go/src/github.com/tutabeier/golang-skeleton/build/golang-skeleton /
-
+FROM alpine AS service
+COPY --from=builder /go/bin/golang-skeleton /bin/service
 EXPOSE 80
-ENTRYPOINT ["/golang-skeleton"]
+ENTRYPOINT ["/bin/service"]

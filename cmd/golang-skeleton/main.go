@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"github.com/tutabeier/golang-skeleton/pkg/users"
 	"log"
 	"net/http"
 	"os"
@@ -61,7 +62,8 @@ func main() {
 func initRoutes(p *prometheus.Exporter) *http.ServeMux {
 	r := http.NewServeMux()
 
-	r.HandleFunc("/status", health.Check())
+	r.Handle("/users", users.Handler())
+	r.Handle("/status", health.Check())
 	r.Handle("/metrics", p)
 
 	return r
@@ -97,7 +99,7 @@ func initPrometheus() *prometheus.Exporter {
 
 	view.RegisterExporter(pe)
 
-	endpointTags := []tag.Key{ochttp.Method, ochttp.KeyServerRoute}
+	endpointTags := []tag.Key{ochttp.Method, ochttp.Path}
 
 	latency := ochttp.ServerLatencyView
 	latency.TagKeys = append(latency.TagKeys, endpointTags...)
