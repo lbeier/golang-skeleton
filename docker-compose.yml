@@ -1,28 +1,39 @@
 version: "3.7"
 
 services:
+  postgres:
+    image: postgres:11-alpine
+    container_name: postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_PASSWORD: admin
+      POSTGRES_USER: admin
+      POSTGRES_DB: db
+
   api:
     build: .
     container_name: api
+    environment:
+      PORT: "80"
+      JAEGER_HOST: "jaeger"
+      DB_DSN: "host=postgres port=5432 user=admin password=admin dbname=db sslmode=disable"
+      MIGRATIONS_FOLDER: "file://./migrations"
+    depends_on:
+      - postgres
     ports:
       - 9999:80
     volumes:
-      - ./:/go/src/github.com/tutabeier/golang-skeleton
-    networks:
-      main:
-        aliases:
-          - tracing
-          - monitoring
+      - ./:/go/src/github.com/tutabeier/service
+    links:
+      - jaeger
+      - postgres
 
   jaeger:
     image: jaegertracing/all-in-one
     container_name: jaeger
     ports:
       - 16686:16686
-    networks:
-      main:
-        aliases:
-          - tracing
 
   prometheus:
     image: prom/prometheus
@@ -33,20 +44,13 @@ services:
       - --config.file=/etc/prometheus/prometheus.yml
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
-    networks:
-      main:
-        aliases:
-          - monitoring
+    links:
+      - api
 
   grafana:
     image: grafana/grafana
     container_name: grafana
     ports:
       - 3000:3000
-    networks:
-      main:
-        aliases:
-          - monitoring
-
-networks:
-  main:
+    links:
+      - prometheus

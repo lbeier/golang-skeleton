@@ -2,46 +2,97 @@ package main
 
 import (
 	"context"
-	"flag"
+	"database/sql"
 	"fmt"
-	"github.com/tutabeier/golang-skeleton/pkg/users"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"time"
 
-	"go.opencensus.io/tag"
+	"github.com/tutabeier/golang-skeleton/pkg/config"
+	"github.com/tutabeier/golang-skeleton/pkg/health"
+	"github.com/tutabeier/golang-skeleton/pkg/users"
 
-	"go.opencensus.io/plugin/ochttp/propagation/b3"
-
-	"go.opencensus.io/exporter/jaeger"
-	"go.opencensus.io/exporter/prometheus"
+	"contrib.go.opencensus.io/exporter/jaeger"
+	"contrib.go.opencensus.io/exporter/prometheus"
+	"github.com/opencensus-integrations/ocsql"
 	"go.opencensus.io/plugin/ochttp"
+	"go.opencensus.io/plugin/ochttp/propagation/b3"
 	"go.opencensus.io/stats/view"
+	"go.opencensus.io/tag"
 	"go.opencensus.io/trace"
 
-
+	"github.com/golang-migrate/migrate/v4"
+	"github.com/golang-migrate/migrate/v4/database/postgres"
+	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/google/uuid"
 
-	"github.com/tutabeier/golang-skeleton/pkg/health"
+	_ "github.com/lib/pq"
 )
 
-func main() {
-	var wait time.Duration
-	flag.DurationVar(&wait, "graceful-timeout", time.Second*15, "the duration for which the server gracefully wait for existing connections to finish - e.g. 15s or 1m")
-	flag.Parse()
+const databaseRetries = 5
 
-	initJaeger()
-	pe := initPrometheus()
+func main() {
+	env := config.GetEnv()
+
+	driverName, err := ocsql.Register("postgres", ocsql.WithAllTraceOptions())
+	if err != nil {
+		log.Panicf("Unable to register OCSQL: %s", err.Error())
+	}
+	db, err := sql.Open(driverName, env.DatabaseDSN)
+	if err != nil {
+		log.Panicf("Error opening database: %s", err.Error())
+	}
+	defer db.Close()
+
+	var i time.Duration
+	for {
+		if i == databaseRetries {
+			log.Panicf("Exceed retries. DB is not ready.")
+		}
+
+		err = db.Ping()
+		if err == nil {
+			log.Print("Postgres ready.")
+			break
+		}
+
+		log.Print(err.Error())
+
+		time.Sleep(i * time.Second)
+		log.Printf("Waiting for Postgres to become ready. Trying again in %ds.", i)
+		i++
+	}
+
+	// TODO: add semaphore to avoid multiple instances running the migrations
+	log.Print("Start running migrations")
+	driver, err := postgres.WithInstance(db, &postgres.Config{})
+	m, err := migrate.NewWithDatabaseInstance(
+		env.MigrationsFolder,
+		"postgres", driver)
+	if err != nil {
+		log.Fatalf("Unable to run migrations: %s", err.Error())
+	}
+	m.Steps(2)
+	log.Print("Finished running migrations")
+
+	ur := users.NewRepository(db)
+	uh := users.NewHandler(ur)
+
+	r := http.NewServeMux()
+	instrumentedRoute(r, "/users", uh.Handle())
+
+	r.Handle("/metrics", initPrometheus())
+	r.Handle("/status", health.Check())
 
 	srv := &http.Server{
-		Addr:         ":80",
+		Addr:         fmt.Sprintf(":%s", env.Port),
 		WriteTimeout: time.Second * 15,
 		ReadTimeout:  time.Second * 15,
 		IdleTimeout:  time.Second * 60,
 		Handler: &ochttp.Handler{
-			Handler:     initRoutes(pe),
+			Handler:     r,
 			Propagation: &b3.HTTPFormat{},
 		},
 	}
@@ -52,31 +103,24 @@ func main() {
 			log.Println(err)
 		}
 	}()
+	go initJaeger(env.JaegerHost)
 
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt)
 	<-c
-	ctx, cancel := context.WithTimeout(context.Background(), wait)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*15)
 	defer cancel()
-	srv.Shutdown(ctx)
-	log.Println("shutting down")
+	err = srv.Shutdown(ctx)
+	if err != nil {
+		log.Fatalf("Error when sutting down server %s", err.Error())
+	}
+	log.Println("Sutting down")
 	os.Exit(0)
 }
 
-func initRoutes(p *prometheus.Exporter) *http.ServeMux {
-	r := http.NewServeMux()
-
-	instrumentedRoute(r, "/users", users.Handler())
-
-	r.Handle("/status", health.Check())
-	r.Handle("/metrics", p)
-
-	return r
-}
-
-func initJaeger() {
+func initJaeger(host string) {
 	je, err := jaeger.NewExporter(jaeger.Options{
-		CollectorEndpoint: "http://tracing:14268/api/traces",
+		CollectorEndpoint: fmt.Sprintf("http://%s:14268/api/traces", host),
 		Process: jaeger.Process{
 			ServiceName: "service",
 		},
@@ -128,7 +172,7 @@ func initPrometheus() *prometheus.Exporter {
 		ochttp.ServerRequestCountByMethod)
 
 	if err != nil {
-		log.Print("Error registering Prometheus views")
+		log.Printf("Error registering Prometheus views: %s", err.Error())
 	}
 
 	return pe

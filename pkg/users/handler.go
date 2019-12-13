@@ -2,19 +2,22 @@ package users
 
 import (
 	"encoding/json"
-	"github.com/prometheus/common/log"
 	"net/http"
+
+	"github.com/prometheus/common/log"
 )
 
-type User struct {
-	Id int `json:"id"`
-	Name string `json:"name"`
-	Email string `json:"email"`
-	Phone string `json:"phone"`
-	Website string `json:"website"`
+type Handler struct {
+	Repository Repository
 }
 
-func Handler() http.HandlerFunc {
+func NewHandler(ur Repository) Handler {
+	return Handler{
+		Repository: ur,
+	}
+}
+
+func (h *Handler) Handle() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		resp, err := http.Get("http://jsonplaceholder.typicode.com/users")
 		if err != nil {
@@ -24,18 +27,22 @@ func Handler() http.HandlerFunc {
 		}
 		defer resp.Body.Close()
 
-		var u []User
-		if err := json.NewDecoder(resp.Body).Decode(&u); err != nil {
+		var us []User
+		if err := json.NewDecoder(resp.Body).Decode(&us); err != nil {
 			log.Error(err.Error())
 			w.WriteHeader(500)
 			return
 		}
 
-		b, err := json.Marshal(u)
+		b, err := json.Marshal(us)
 		if err != nil {
 			log.Error(err)
 			w.WriteHeader(500)
 			return
+		}
+
+		for _, u := range us {
+			h.Repository.Save(u)
 		}
 
 		w.WriteHeader(200)
